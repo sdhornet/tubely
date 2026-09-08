@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -46,8 +47,11 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	defer file.Close()
-
-	mediaType := header.Header.Get("Content-Type")
+	mediaType, _, err := mime.ParseMediaType(header.Header.Get("Content-Type"))
+	if err != nil {
+		respondWithError(w, http.StatusBadRequest, "Invalid Content-Type", err)
+		return
+	}
 	if mediaType != "image/jpeg" && mediaType != "image/png" {
 		respondWithError(w, http.StatusBadRequest, "Invalid media type", nil)
 		return
@@ -64,8 +68,8 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	if userID != video.CreateVideoParams.UserID {
-		respondWithError(w, http.StatusUnauthorized, "You are not the video owner", err)
+	if userID != video.UserID {
+		respondWithError(w, http.StatusUnauthorized, "You are not the video owner", nil)
 		return
 	}
 	randData := make([]byte, 32)
@@ -83,6 +87,7 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 
 	if _, err := io.Copy(dst, file); err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Unable to save thumbnail", err)
+		return
 	}
 
 	tnUrl := fmt.Sprintf("http://localhost:%s/assets/%s", cfg.port, filename)
