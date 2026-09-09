@@ -64,7 +64,7 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 
 	video, err := cfg.db.GetVideo(videoID)
 	if err != nil {
-		respondWithError(w, http.StatusBadRequest, "Unable to find video", err)
+		respondWithError(w, http.StatusInternalServerError, "Unable to find video", err)
 		return
 	}
 

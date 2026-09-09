@@ -62,6 +62,9 @@ func (c Client) GetVideos(userID uuid.UUID) ([]Video, error) {
 		}
 		videos = append(videos, video)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 
 	return videos, nil
 }
