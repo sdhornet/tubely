@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
@@ -90,7 +91,12 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 
 	key := keyBase + ".mp4"
 
-	if _, err = cfg.s3Client.PutObject(r.Context(), &s3.PutObjectInput{Bucket: &cfg.s3Bucket, Key: &key, Body: tempFile, ContentType: &mediaType}); err != nil {
+	if _, err = cfg.s3Client.PutObject(r.Context(),
+		&s3.PutObjectInput{
+			Bucket:      aws.String(cfg.s3Bucket),
+			Key:         aws.String(key),
+			Body:        tempFile,
+			ContentType: aws.String(mediaType)}); err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Failed to save the video", err)
 		return
 	}
