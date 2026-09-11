@@ -1,13 +1,18 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"mime"
 	"net/http"
 	"os"
+	"os/exec"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -85,17 +90,42 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	randData := make([]byte, 32)
+	fastVidPath, err := processVideoForFastStart(tempFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Video processing failed", err)
+		return
+	}
+	fastVid, err := os.Open(fastVidPath)
+	defer os.Remove(fastVid.Name())
+	defer fastVid.Close()
+
+	aspectRatio, err := getVideoAspectRation(fastVid.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error Parsing video metadata", err)
+		return
+	}
+
+	randData := make([]byte, 16)
 	rand.Read(randData)
 	keyBase := hex.EncodeToString(randData)
+	var ratioPrefix string
 
-	key := keyBase + ".mp4"
+	switch aspectRatio {
+	case "16:9":
+		ratioPrefix = "landscape"
+	case "9:16":
+		ratioPrefix = "portrait"
+	default:
+		ratioPrefix = "other"
+	}
+
+	key := ratioPrefix + "/" + keyBase + ".mp4"
 
 	if _, err = cfg.s3Client.PutObject(r.Context(),
 		&s3.PutObjectInput{
 			Bucket:      aws.String(cfg.s3Bucket),
 			Key:         aws.String(key),
-			Body:        tempFile,
+			Body:        fastVid,
 			ContentType: aws.String(mediaType)}); err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Failed to save the video", err)
 		return
@@ -110,4 +140,48 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 
 	respondWithJSON(w, http.StatusOK, video)
+}
+
+func getVideoAspectRation(filePath string) (string, error) {
+	type FFProbeOutput struct {
+		Streams []struct {
+			Width  float64 `json:"width,omitempty"`
+			Height float64 `json:"height,omitempty"`
+		} `json:"streams"`
+	}
+
+	vidStats := FFProbeOutput{}
+	output := &bytes.Buffer{}
+
+	cmd := exec.Command("ffprobe", "-v", "error", "-print_format", "json", "-show_streams", filePath)
+	cmd.Stdout = output
+	if err := cmd.Run(); err != nil {
+		return "", errors.New("Failed to run video parsing command")
+	}
+
+	if err := json.Unmarshal(output.Bytes(), &vidStats); err != nil {
+		return "", errors.New("Failed to extract video metadata")
+	}
+
+	var ratio float64 = vidStats.Streams[0].Width / vidStats.Streams[0].Height
+
+	switch math.Round(ratio*100) / 100 {
+	case 1.78:
+		return "16:9", nil
+	case 0.56:
+		return "9:16", nil
+	default:
+		return "other", nil
+	}
+}
+
+func processVideoForFastStart(filePath string) (string, error) {
+	fastVid := filePath + ".processing"
+
+	cmd := exec.Command("ffmpeg", "-i", filePath, "-c", "copy", "-movflags", "faststart", "-f", "mp4", fastVid)
+	if err := cmd.Run(); err != nil {
+		return "", errors.New("Failed to process video for streaming")
+	}
+
+	return fastVid, nil
 }
