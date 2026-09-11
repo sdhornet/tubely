@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -85,21 +84,20 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if _, err = tempFile.Seek(0, io.SeekStart); err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Unable to seek video", err)
-		return
-	}
-
 	fastVidPath, err := processVideoForFastStart(tempFile.Name())
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Video processing failed", err)
 		return
 	}
 	fastVid, err := os.Open(fastVidPath)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Failed to open streaming video file", err)
+		return
+	}
 	defer os.Remove(fastVid.Name())
 	defer fastVid.Close()
 
-	aspectRatio, err := getVideoAspectRation(fastVid.Name())
+	aspectRatio, err := getVideoAspectRatio(fastVid.Name())
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Error Parsing video metadata", err)
 		return
@@ -142,7 +140,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	respondWithJSON(w, http.StatusOK, video)
 }
 
-func getVideoAspectRation(filePath string) (string, error) {
+func getVideoAspectRatio(filePath string) (string, error) {
 	type FFProbeOutput struct {
 		Streams []struct {
 			Width  float64 `json:"width,omitempty"`
@@ -152,15 +150,17 @@ func getVideoAspectRation(filePath string) (string, error) {
 
 	vidStats := FFProbeOutput{}
 	output := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
 
 	cmd := exec.Command("ffprobe", "-v", "error", "-print_format", "json", "-show_streams", filePath)
 	cmd.Stdout = output
+	cmd.Stderr = stderr
 	if err := cmd.Run(); err != nil {
-		return "", errors.New("Failed to run video parsing command")
+		return "", fmt.Errorf("ffprobe: %w: %s", err, bytes.TrimSpace(stderr.Bytes()))
 	}
 
 	if err := json.Unmarshal(output.Bytes(), &vidStats); err != nil {
-		return "", errors.New("Failed to extract video metadata")
+		return "", fmt.Errorf("ffprobe json: %w", err)
 	}
 
 	var ratio float64 = vidStats.Streams[0].Width / vidStats.Streams[0].Height
@@ -178,9 +178,11 @@ func getVideoAspectRation(filePath string) (string, error) {
 func processVideoForFastStart(filePath string) (string, error) {
 	fastVid := filePath + ".processing"
 
-	cmd := exec.Command("ffmpeg", "-i", filePath, "-c", "copy", "-movflags", "faststart", "-f", "mp4", fastVid)
+	stderr := &bytes.Buffer{}
+	cmd := exec.Command("ffmpeg", "-v", "error", "-i", filePath, "-c", "copy", "-movflags", "faststart", "-f", "mp4", fastVid)
+	cmd.Stderr = stderr
 	if err := cmd.Run(); err != nil {
-		return "", errors.New("Failed to process video for streaming")
+		return "", fmt.Errorf("ffmpeg: %w: %s", err, bytes.TrimSpace(stderr.Bytes()))
 	}
 
 	return fastVid, nil
